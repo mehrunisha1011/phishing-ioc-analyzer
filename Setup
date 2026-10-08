@@ -1,0 +1,4 @@
+mkdir -p phishing-ioc-analyzer/{Scripts,Sample_Data,Documentation,Screenshots,Evidence,Configuration}
+cd phishing-ioc-analyzer
+git init
+python3 --version
