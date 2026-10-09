@@ -29,6 +29,7 @@ FLAGS    :
    [!] DKIM result is 'none'
    [!] DMARC result is 'fail'
    [!] URL points to a raw IP address
+   [!] Look-alike domain: paypa1-secure.example imitates 'paypal'
 ============================================================
 FILE     : Sample_Data/phish2_invoice.eml
 FROM     : Accounts Dept <billing@invoice-center.example>
