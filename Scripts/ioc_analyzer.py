@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, email, hashlib, json, re
+import argparse, difflib, email, hashlib, json, re
 from email import policy
 from email.utils import parseaddr
 from urllib.parse import urlparse
@@ -48,6 +48,47 @@ def hash_bytes(data):
         "sha256": hashlib.sha256(data).hexdigest(),
     }
 
+BRANDS = {
+    "paypal": ["paypal.com"],
+    "microsoft": ["microsoft.com", "live.com", "office.com", "outlook.com"],
+    "google": ["google.com", "gmail.com"],
+    "apple": ["apple.com", "icloud.com"],
+    "amazon": ["amazon.com"],
+    "netflix": ["netflix.com"],
+    "facebook": ["facebook.com"],
+    "linkedin": ["linkedin.com"],
+    "dhl": ["dhl.com"],
+    "maybank": ["maybank.com", "maybank2u.com.my"],
+}
+
+def normalize_variants(token):
+    base = token.lower().replace("rn", "m").replace("vv", "w")
+    out = set()
+    for one in ("l", "i"):
+        table = str.maketrans({"0": "o", "1": one, "3": "e", "4": "a", "5": "s", "$": "s"})
+        out.add(base.translate(table))
+    return out
+
+def lookalike_flags(domains):
+    found = []
+    for d in domains:
+        if any(d == off or d.endswith("." + off) for offs in BRANDS.values() for off in offs):
+            continue
+        labels = d.split(".")[:-1] or [d]
+        tokens = [t for lab in labels for t in lab.split("-") if t]
+        for brand in BRANDS:
+            for tok in tokens:
+                if tok == brand:
+                    found.append("Brand name '%s' used in unofficial domain (%s)" % (brand, d))
+                    break
+                variants = normalize_variants(tok)
+                close = len(tok) >= 5 and any(
+                    difflib.SequenceMatcher(None, v, brand).ratio() >= 0.85 for v in variants)
+                if brand in variants or close:
+                    found.append("Look-alike domain: %s imitates '%s'" % (d, brand))
+                    break
+    return found
+
 def analyze(path):
     with open(path, "rb") as f:
         msg = email.message_from_binary_file(f, policy=policy.default)
@@ -86,6 +127,8 @@ def analyze(path):
         flags.append("Attachment has double extension")
     if any(IPV4_RE.fullmatch(urlparse(u).hostname or "") for u in urls):
         flags.append("URL points to a raw IP address")
+
+    flags += lookalike_flags(sorted(domains))
 
     return {
         "file": path,
