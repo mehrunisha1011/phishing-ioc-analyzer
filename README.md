@@ -26,9 +26,9 @@ Built as part of my **CYMANABU Cybersecurity Internship**.
 
 Run with `--html` to generate a dashboard with a 0–100 risk score per email:
 
-![Overview](dashboard1_overview.png)
-![Credential phishing - 90/100 HIGH](dashboard2_phish1.png)
-![Malicious invoice - 67/100 HIGH](dashboard3_phish2.png)
+![Overview](Documentation/dashboard1_overview.png)
+![Credential phishing - 90/100 HIGH](Documentation/dashboard2_phish1.png)
+![Malicious invoice - 67/100 HIGH](Documentation/dashboard3_phish2.png)
 
 ## ✨ Features
 
