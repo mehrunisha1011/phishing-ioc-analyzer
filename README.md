@@ -22,6 +22,14 @@ Built as part of my **CYMANABU Cybersecurity Internship**.
 
 > ⚠️ **Safety:** Only synthetic sample emails are used. No real or confidential emails are included. Domains use the reserved `.example` TLD and IPs use documentation ranges.
 
+## 📊 Visual Report
+
+Run with `--html` to generate a dashboard with a 0–100 risk score per email:
+
+![Overview](dashboard1_overview.png)
+![Credential phishing - 90/100 HIGH](dashboard2_phish1.png)
+![Malicious invoice - 67/100 HIGH](dashboard3_phish2.png)
+
 ## ✨ Features
 
 | Capability | Details |
