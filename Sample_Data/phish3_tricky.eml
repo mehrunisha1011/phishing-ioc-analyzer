@@ -1,0 +1,10 @@
+From: Microsoft Support <alert@micros0ft-support.example>
+Return-Path: <bounce@totally-other.example>
+Subject: Security alert: act now
+Received: from x ([192.0.2.55]) by mx.example.org
+Authentication-Results: mx.example.org; spf=fail; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: text/html
+
+<html><body>Your account has been suspended. <a href="http://bit.ly/3abcXYZ">www.microsoft.com/verify</a>
+<a href="http://xn--pypal-4ve.example/login">Sign in</a></body></html>
