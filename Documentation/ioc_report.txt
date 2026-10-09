@@ -1,0 +1,48 @@
+============================================================
+FILE     : Sample_Data/benign_newsletter.eml
+FROM     : Example News <newsletter@example.org>
+REPLY-TO : None
+SUBJECT  : Your weekly digest
+AUTH     : {'spf': 'pass', 'dkim': 'pass', 'dmarc': 'pass'}
+HDR IPs  : 192.0.2.10
+URLS     :
+   https://www.example.org/news/weekly
+DOMAINS  : example.org, www.example.org
+BODY IPs : -
+FLAGS    : none
+============================================================
+FILE     : Sample_Data/phish1_credential.eml
+FROM     : PayPal Security <security@paypa1-secure.example>
+REPLY-TO : support-desk@mail-gateway.example
+SUBJECT  : Urgent: Your account has been limited
+AUTH     : {'spf': 'fail', 'dkim': 'none', 'dmarc': 'fail'}
+HDR IPs  : 198.51.100.7, 203.0.113.45
+URLS     :
+   http://203.0.113.45/login.php
+   http://paypa1-secure.example/verify?id=88123
+   https://www.paypal.com/verify
+DOMAINS  : mail-gateway.example, paypa1-secure.example, www.paypal.com
+BODY IPs : 203.0.113.45
+FLAGS    :
+   [!] Reply-To domain (mail-gateway.example) differs from From domain (paypa1-secure.example)
+   [!] SPF result is 'fail'
+   [!] DKIM result is 'none'
+   [!] DMARC result is 'fail'
+   [!] URL points to a raw IP address
+============================================================
+FILE     : Sample_Data/phish2_invoice.eml
+FROM     : Accounts Dept <billing@invoice-center.example>
+REPLY-TO : billing@invoice-center.example
+SUBJECT  : Invoice 8841 overdue - open attached
+AUTH     : {'spf': 'softfail', 'dkim': 'fail', 'dmarc': 'fail'}
+HDR IPs  : 192.0.2.99
+URLS     :
+   https://pay.invoice-center.example/inv/8841
+DOMAINS  : invoice-center.example, pay.invoice-center.example
+BODY IPs : -
+ATTACH   : Invoice_8841.pdf.exe  sha256=e4017d8342e180f652f3f8a329564fa4f6b5750af71380fe81c71e4d6dd2ac8b
+FLAGS    :
+   [!] SPF result is 'softfail'
+   [!] DKIM result is 'fail'
+   [!] DMARC result is 'fail'
+   [!] Attachment has double extension

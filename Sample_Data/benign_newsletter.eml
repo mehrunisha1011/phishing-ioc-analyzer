@@ -1,0 +1,14 @@
+From: "Example News" <newsletter@example.org>
+To: victim@corp.test
+Subject: Your weekly digest
+Date: Fri, 09 Oct 2026 00:40:25 +0000
+Message-ID: <synthetic-2528209130517066939@lab.test>
+Received: from mail.example.org ([192.0.2.10]) by mx.corp.test with ESMTP;
+ Thu, 08 Oct 2026 04:00:00 +0000
+Authentication-Results: mx.corp.test; spf=pass smtp.mailfrom=example.org;
+ dkim=pass header.d=example.org; dmarc=pass header.from=example.org
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Read this week's stories: https://www.example.org/news/weekly

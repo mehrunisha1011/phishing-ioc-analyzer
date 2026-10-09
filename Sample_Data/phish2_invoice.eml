@@ -1,0 +1,29 @@
+From: "Accounts Dept" <billing@invoice-center.example>
+To: victim@corp.test
+Subject: Invoice 8841 overdue - open attached
+Date: Fri, 09 Oct 2026 00:40:25 +0000
+Message-ID: <synthetic-1687428324347198636@lab.test>
+Reply-To: billing@invoice-center.example
+Received: from smtp.invoice-center.example ([192.0.2.99]) by mx.corp.test with
+ ESMTP; Thu, 08 Oct 2026 03:30:00 +0000
+Authentication-Results: mx.corp.test; spf=softfail
+ smtp.mailfrom=invoice-center.example; dkim=fail; dmarc=fail
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============6835647587373644486=="
+
+--===============6835647587373644486==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Please see the attached invoice. Pay at https://pay.invoice-center.example/in=
+v/8841 within 24h.
+
+--===============6835647587373644486==
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="Invoice_8841.pdf.exe"
+MIME-Version: 1.0
+
+RFVNTVktU0FNUExFLU5PVC1BLVJFQUwtRklMRQ==
+
+--===============6835647587373644486==--
