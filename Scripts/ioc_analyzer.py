@@ -4,15 +4,56 @@ from datetime import datetime
 from email import policy
 from email.utils import parseaddr
 from html import escape
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 URL_RE   = re.compile(r'https?://[^\s"\'<>\)\]]+', re.I)
 IPV4_RE  = re.compile(r'\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b')
 EMAIL_RE = re.compile(r'[\w.+-]+@[\w-]+(?:\.[\w-]+)+')
 
+SHORTENERS = {"bit.ly", "tinyurl.com", "t.co", "goo.gl", "ow.ly", "is.gd",
+              "buff.ly", "rebrand.ly", "cutt.ly", "shorturl.at", "tiny.cc"}
+RISKY_EXT = {".exe", ".scr", ".js", ".vbs", ".bat", ".cmd", ".com", ".jar",
+             ".iso", ".lnk", ".docm", ".xlsm", ".ps1"}
+URGENCY = ["urgent", "immediately", "act now", "suspended", "verify your",
+           "confirm your", "has been limited", "overdue", "final notice",
+           "unusual activity", "security alert", "within 24 hours",
+           "password will expire", "open attached"]
+
+MITRE = {
+    "T1566.001": "Phishing: Spearphishing Attachment",
+    "T1566.002": "Phishing: Spearphishing Link",
+    "T1036.007": "Masquerading: Double File Extension",
+    "T1583.001": "Acquire Infrastructure: Domains",
+    "T1656":     "Impersonation",
+}
+
+BRANDS = {
+    "paypal": ["paypal.com"],
+    "microsoft": ["microsoft.com", "live.com", "office.com", "outlook.com"],
+    "google": ["google.com", "gmail.com"],
+    "apple": ["apple.com", "icloud.com"],
+    "amazon": ["amazon.com"],
+    "netflix": ["netflix.com"],
+    "facebook": ["facebook.com"],
+    "linkedin": ["linkedin.com"],
+    "dhl": ["dhl.com"],
+    "maybank": ["maybank.com", "maybank2u.com.my"],
+}
+
+# ---------------------------------------------------------------- helpers
+def defang(s, on=True):
+    """hxxp://evil[.]example  -> safe to paste into reports/chat."""
+    if not on:
+        return s
+    return s.replace("http", "hxxp").replace(".", "[.]")
+
 def addr_domain(value):
     addr = parseaddr(value or "")[1]
     return addr.split("@")[-1].lower() if "@" in addr else ""
+
+def same_org(a, b):
+    return a == b or a.endswith("." + b) or b.endswith("." + a)
 
 def get_bodies(msg):
     plain, html = "", ""
@@ -50,18 +91,43 @@ def hash_bytes(data):
         "sha256": hashlib.sha256(data).hexdigest(),
     }
 
-BRANDS = {
-    "paypal": ["paypal.com"],
-    "microsoft": ["microsoft.com", "live.com", "office.com", "outlook.com"],
-    "google": ["google.com", "gmail.com"],
-    "apple": ["apple.com", "icloud.com"],
-    "amazon": ["amazon.com"],
-    "netflix": ["netflix.com"],
-    "facebook": ["facebook.com"],
-    "linkedin": ["linkedin.com"],
-    "dhl": ["dhl.com"],
-    "maybank": ["maybank.com", "maybank2u.com.my"],
-}
+# ------------------------------------------------------------ detections
+class LinkParser(HTMLParser):
+    """Collects (href, visible text) pairs from <a> tags."""
+    def __init__(self):
+        super().__init__()
+        self.links, self._href, self._text = [], None, []
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self._href, self._text = dict(attrs).get("href"), []
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+    def handle_endtag(self, tag):
+        if tag == "a" and self._href is not None:
+            self.links.append((self._href, "".join(self._text).strip()))
+            self._href = None
+
+def link_mismatch_flags(html):
+    """Visible link text shows one site, but the href goes somewhere else."""
+    if not html.strip():
+        return []
+    p = LinkParser()
+    try:
+        p.feed(html)
+    except Exception:
+        return []
+    out = []
+    for href, text in p.links:
+        m = re.search(r'(?:https?://)?((?:[\w-]+\.)+[a-z]{2,})', text, re.I)
+        real = (urlparse(href).hostname or "").lower()
+        if not m or not real:
+            continue
+        shown = m.group(1).lower().replace("www.", "", 1)
+        real_c = real.replace("www.", "", 1)
+        if not same_org(shown, real_c):
+            out.append("Link text shows '%s' but links to '%s'" % (shown, real))
+    return sorted(set(out))
 
 def normalize_variants(token):
     base = token.lower().replace("rn", "m").replace("vv", "w")
@@ -91,6 +157,26 @@ def lookalike_flags(domains):
                     break
     return found
 
+def urgency_hits(text):
+    t = text.lower()
+    return [p for p in URGENCY if p in t]
+
+def mitre_for(flags):
+    txt = " | ".join(flags)
+    tags = set()
+    brand = "Look-alike" in txt or "Brand name" in txt or "Punycode" in txt
+    if brand or any(k in txt for k in ("raw IP", "shortener", "Link text")):
+        tags.add("T1566.002")
+    if "double extension" in txt or "risky file type" in txt:
+        tags.add("T1566.001")
+    if "double extension" in txt:
+        tags.add("T1036.007")
+    if brand:
+        tags.add("T1583.001")
+    if brand or "Reply-To domain" in txt or "Return-Path" in txt:
+        tags.add("T1656")
+    return sorted(tags)
+
 def risk_score(r):
     """Score 0-100 from authentication results and detection flags."""
     score = 0
@@ -103,16 +189,29 @@ def risk_score(r):
     for f in r["flags"]:
         if f.startswith("Reply-To"):
             score += 15
+        elif f.startswith("Return-Path"):
+            score += 10
         elif "raw IP" in f:
             score += 20
         elif "double extension" in f:
             score += 35
+        elif "risky file type" in f:
+            score += 20
         elif "Look-alike" in f or "Brand name" in f:
             score += 20
+        elif f.startswith("Link text"):
+            score += 25
+        elif "shortener" in f:
+            score += 15
+        elif f.startswith("Punycode"):
+            score += 15
+        elif f.startswith("Urgency"):
+            score += 10
     score = min(score, 100)
     level = "HIGH" if score >= 60 else "MEDIUM" if score >= 30 else "LOW"
     return score, level
 
+# -------------------------------------------------------------- analysis
 def analyze(path):
     with open(path, "rb") as f:
         msg = email.message_from_binary_file(f, policy=policy.default)
@@ -140,19 +239,40 @@ def analyze(path):
 
     auth = parse_auth(msg)
     from_dom, reply_dom = addr_domain(msg["From"]), addr_domain(msg["Reply-To"])
+    path_dom = addr_domain(msg["Return-Path"])
 
     flags = []
     if reply_dom and reply_dom != from_dom:
         flags.append("Reply-To domain (%s) differs from From domain (%s)" % (reply_dom, from_dom))
+    if path_dom and from_dom and not same_org(path_dom, from_dom):
+        flags.append("Return-Path domain (%s) differs from From domain (%s)" % (path_dom, from_dom))
     for k, v in auth.items():
         if v != "pass":
             flags.append("%s result is '%s'" % (k.upper(), v))
     if any(a["filename"] and a["filename"].lower().count(".") >= 2 for a in attachments):
         flags.append("Attachment has double extension")
+    for a in attachments:
+        name = (a["filename"] or "").lower()
+        ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+        if ext in RISKY_EXT:
+            flags.append("Attachment has risky file type (%s)" % ext)
+            break
     if any(IPV4_RE.fullmatch(urlparse(u).hostname or "") for u in urls):
         flags.append("URL points to a raw IP address")
+    for u in urls:
+        host = (urlparse(u).hostname or "").lower()
+        if host in SHORTENERS:
+            flags.append("URL shortener used (%s) hides the real destination" % host)
+            break
+    if any(label.startswith("xn--") for d in domains for label in d.split(".")):
+        flags.append("Punycode (xn--) domain, possible homograph attack")
 
+    flags += link_mismatch_flags(html)
     flags += lookalike_flags(sorted(domains))
+
+    hits = urgency_hits(str(msg["Subject"]) + " " + plain + " " + html)
+    if len(hits) >= 2:
+        flags.append("Urgency / pressure language (%s)" % ", ".join(hits[:3]))
 
     result = {
         "file": path,
@@ -171,25 +291,32 @@ def analyze(path):
         "flags": flags,
     }
     result["risk_score"], result["risk_level"] = risk_score(result)
+    result["mitre"] = mitre_for(flags) if result["risk_level"] != "LOW" else []
     return result
 
-def summary(r):
+# ---------------------------------------------------------------- output
+def summary(r, dfg=False):
     print("=" * 60)
     print("FILE     :", r["file"])
     print("FROM     :", r["from"])
     print("REPLY-TO :", r["reply_to"])
     print("SUBJECT  :", r["subject"])
     print("AUTH     :", r["authentication"])
-    print("HDR IPs  :", ", ".join(r["header_ips"]) or "-")
-    print("URLS     :", *r["urls"], sep="\n   ") if r["urls"] else print("URLS     : -")
-    print("DOMAINS  :", ", ".join(r["domains"]) or "-")
-    print("BODY IPs :", ", ".join(r["body_ips"]) or "-")
+    print("HDR IPs  :", ", ".join(defang(i, dfg) for i in r["header_ips"]) or "-")
+    if r["urls"]:
+        print("URLS     :", *[defang(u, dfg) for u in r["urls"]], sep="\n   ")
+    else:
+        print("URLS     : -")
+    print("DOMAINS  :", ", ".join(defang(d, dfg) for d in r["domains"]) or "-")
+    print("BODY IPs :", ", ".join(defang(i, dfg) for i in r["body_ips"]) or "-")
     for a in r["attachments"]:
-        print("ATTACH   : %s  sha256=%s" % (a["filename"], a["sha256"]))
+        print("ATTACH   : %s  sha256=%s" % (defang(a["filename"] or "", dfg), a["sha256"]))
     print("FLAGS    :", *r["flags"], sep="\n   [!] ") if r["flags"] else print("FLAGS    : none")
     print("RISK     : %d/100 (%s)" % (r["risk_score"], r["risk_level"]))
+    if r["mitre"]:
+        print("MITRE    :", ", ".join("%s %s" % (t, MITRE[t]) for t in r["mitre"]))
 
-def write_html(results, path):
+def write_html(results, path, dfg=False):
     colors = {"HIGH": "#ef4444", "MEDIUM": "#f59e0b", "LOW": "#22c55e"}
 
     def row(label, items):
@@ -207,9 +334,17 @@ def write_html(results, path):
             "<span class='pill %s'>%s: %s</span>" %
             ("good" if v == "pass" else "bad", k.upper(), escape(v))
             for k, v in r["authentication"].items())
-        atts = ["%s (sha256: %s)" % (a["filename"], a["sha256"]) for a in r["attachments"]]
-        iocs = (row("Header IPs", r["header_ips"]) + row("Body IPs", r["body_ips"]) +
-                row("Domains", r["domains"]) + row("URLs", r["urls"]) + row("Attachments", atts))
+        mitre = "".join(
+            "<a class='mitre' href='https://attack.mitre.org/techniques/%s/'>%s &middot; %s</a>" %
+            (t.replace(".", "/"), t, escape(MITRE[t])) for t in r["mitre"])
+        mitre_block = "<h3>MITRE ATT&amp;CK</h3><div>%s</div>" % mitre if mitre else ""
+        atts = ["%s (sha256: %s)" % (defang(a["filename"] or "", dfg), a["sha256"])
+                for a in r["attachments"]]
+        iocs = (row("Header IPs", [defang(i, dfg) for i in r["header_ips"]]) +
+                row("Body IPs", [defang(i, dfg) for i in r["body_ips"]]) +
+                row("Domains", [defang(d, dfg) for d in r["domains"]]) +
+                row("URLs", [defang(u, dfg) for u in r["urls"]]) +
+                row("Attachments", atts))
         cards.append("""
 <section class="card" style="border-top:4px solid %s">
   <div class="head">
@@ -219,14 +354,17 @@ def write_html(results, path):
   <p><b>From:</b> %s<br><b>Reply-To:</b> %s</p>
   <div>%s</div>
   <h3>Flags</h3><ul class="flags">%s</ul>
+  %s
   <h3>Extracted IOCs</h3><table>%s</table>
 </section>""" % (c, escape(r["subject"]), escape(r["file"]), c, r["risk_score"],
-                 r["risk_level"], escape(r["from"]), escape(str(r["reply_to"])), auth, flags, iocs))
+                 r["risk_level"], escape(r["from"]), escape(str(r["reply_to"])), auth,
+                 flags, mitre_block, iocs))
 
     counts = {lvl: sum(1 for r in results if r["risk_level"] == lvl) for lvl in colors}
     stats = "".join(
         "<div class='stat'><b style='color:%s'>%d</b><span>%s</span></div>" % (colors[l], n, l)
         for l, n in counts.items())
+    note = " &middot; IOCs defanged" if dfg else ""
 
     page = """<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -245,6 +383,7 @@ h1{margin:0 0 4px;font-size:28px} .muted{color:#8b949e;margin:2px 0}
 .score small{font-size:16px;color:#8b949e} .score span{display:block;font-size:12px;letter-spacing:2px}
 .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;margin:2px 6px 2px 0}
 .pill.good{background:#12351f;color:#3fb950} .pill.bad{background:#3d1418;color:#f85149}
+a.mitre{display:inline-block;background:#1b2433;border:1px solid #2f4466;color:#79b8ff;border-radius:6px;padding:2px 10px;margin:2px 6px 2px 0;font-size:12.5px;text-decoration:none}
 h3{font-size:13px;letter-spacing:1px;text-transform:uppercase;color:#8b949e;margin:18px 0 6px}
 .flags{margin:0;padding-left:20px;color:#f0883e} .flags .ok{color:#3fb950}
 table{width:100%%;border-collapse:collapse} th{width:110px;text-align:left;color:#8b949e;vertical-align:top;padding:5px 0;font-weight:500}
@@ -252,11 +391,12 @@ td{padding:5px 0} code{display:inline-block;background:#0d1117;border:1px solid 
 footer{color:#8b949e;font-size:12px;text-align:center;margin-top:30px}
 </style></head><body><div class="wrap">
 <h1>🛡️ Phishing IOC Report</h1>
-<p class="muted">Generated %s &middot; %d email(s) analyzed &middot; synthetic samples only</p>
+<p class="muted">Generated %s &middot; %d email(s) analyzed &middot; synthetic samples only%s</p>
 <div class="stats">%s</div>
 %s
 <footer>Phishing Email &amp; IOC Analyzer &middot; github.com/mehrunisha1011/phishing-ioc-analyzer</footer>
-</div></body></html>""" % (datetime.now().strftime("%Y-%m-%d %H:%M"), len(results), stats, "".join(cards))
+</div></body></html>""" % (datetime.now().strftime("%Y-%m-%d %H:%M"), len(results), note,
+                            stats, "".join(cards))
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)
 
@@ -265,14 +405,16 @@ if __name__ == "__main__":
     ap.add_argument("eml", nargs="+")
     ap.add_argument("-j", "--json", help="write JSON report to this file")
     ap.add_argument("--html", help="write a visual HTML report to this file")
+    ap.add_argument("-d", "--defang", action="store_true",
+                    help="defang URLs/domains/IPs in console and HTML output (hxxp, [.])")
     args = ap.parse_args()
     results = [analyze(p) for p in args.eml]
     for r in results:
-        summary(r)
+        summary(r, args.defang)
     if args.json:
         with open(args.json, "w") as f:
             json.dump(results, f, indent=2)
         print("\nJSON report written to", args.json)
     if args.html:
-        write_html(results, args.html)
+        write_html(results, args.html, args.defang)
         print("HTML report written to", args.html)
